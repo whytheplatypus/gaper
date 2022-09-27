@@ -6,31 +6,21 @@ const x11 = @cImport({
 });
 
 pub fn main() !void {
-    var args = std.process.args();
-    _ = args.skip();
-    const filename = args.next().?;
-    std.debug.print("working with file {s}.\n", .{filename});
+    const filename = fetch_filename_arg();
+    const wallpaper = load_wallpaper(filename);
 
-    const wallpaper = load_wallpaper("out-0.bmp");
-    const img = wallpaper.image;
-    const img_width = wallpaper.width;
-    const img_height = wallpaper.height;
 
-    // TODO handle null, case with function and if?
-    // QUESTION how does zig do error handling? null display is an error state
-    const display = x11.XOpenDisplay(null);
-    defer _ = x11.XCloseDisplay(display);
+    const desktop = load_desktop();
+    defer desktop.close();
+    const display = desktop.display;
+
+    std.debug.print("Screen size is {d} {d}.\n", .{ desktop.width, desktop.height });
+
+    const buffer = x11.imlib_create_image(desktop.width, desktop.height);
+    x11.imlib_context_set_image(buffer);
+
     const screen = @intCast(usize, 0);
     const root = x11.RootWindow(display, screen);
-
-    const width = x11.DisplayWidth(display, screen);
-    const height = x11.DisplayHeight(display, screen);
-    const pixmap = create_desktop_pixmap(display, width, height);
-
-    std.debug.print("Screen size is {d} {d}.\n", .{ width, height });
-
-    const buffer = x11.imlib_create_image(width, height);
-    x11.imlib_context_set_image(buffer);
 
     // TODO extract monitor retrieval
     var monitor_count: c_int = 0;
@@ -42,7 +32,7 @@ pub fn main() !void {
         const current_monitor = monitors[monitor_index];
         std.debug.print("Monitor {d} is {d} {d} {d} {d}.\n", .{ monitor_index, current_monitor.x_org, current_monitor.y_org, current_monitor.width, current_monitor.height });
 
-        x11.imlib_blend_image_onto_image(img, 0, 0, 0, img_width, img_height, current_monitor.x_org, current_monitor.y_org, current_monitor.width, current_monitor.height);
+        x11.imlib_blend_image_onto_image(wallpaper.image, 0, 0, 0, wallpaper.width, wallpaper.height, current_monitor.x_org, current_monitor.y_org, current_monitor.width, current_monitor.height);
     }
 
     x11.imlib_context_set_display(display);
@@ -51,18 +41,25 @@ pub fn main() !void {
 
     x11.imlib_context_set_dither(1);
     x11.imlib_context_set_blend(1);
-    x11.imlib_context_set_drawable(pixmap);
+    x11.imlib_context_set_drawable(desktop.pixmap);
 
     // use monitor specs here
     x11.imlib_render_image_on_drawable(0, 0);
     _ = x11.XKillClient(display, x11.AllTemporary);
     _ = x11.XSetCloseDownMode(display, x11.RetainTemporary);
-    _ = x11.XSetWindowBackgroundPixmap(display, root, pixmap);
+    _ = x11.XSetWindowBackgroundPixmap(display, root, desktop.pixmap);
     _ = x11.XClearWindow(display, root);
     _ = x11.XFlush(display);
     _ = x11.XSync(display, 0);
-    defer _ = x11.XFreePixmap(display, pixmap);
+    defer _ = x11.XFreePixmap(display, desktop.pixmap);
     defer x11.imlib_free_image();
+}
+
+fn fetch_filename_arg() [*:0]const u8 {
+    var args = std.process.args();
+    _ = args.skip();
+    const filename: [*:0]const u8 = args.next().?;
+    return filename;
 }
 
 const Wallpaper = struct {
@@ -71,7 +68,9 @@ const Wallpaper = struct {
     image: x11.Imlib_Image,
 };
 
-fn load_wallpaper(filename: *const [9:0]u8) Wallpaper {
+fn load_wallpaper(filename: [*:0]const u8) Wallpaper {
+    //const fname = [_][*c]const u8 {filename};
+
     const img = x11.imlib_load_image(filename);
     x11.imlib_context_set_image(img);
     defer x11.imlib_context_pop();
@@ -84,11 +83,29 @@ fn load_wallpaper(filename: *const [9:0]u8) Wallpaper {
     };
 }
 
-fn create_desktop_pixmap(display: ?*x11.Display, width: c_int, height: c_int) x11.Pixmap {
+const Desktop = struct {
+    width: c_int,
+    height: c_int,
+    display: ?*x11.Display,
+    pixmap: x11.Pixmap,
+
+    fn close(self: Desktop) void {
+        _ = x11.XCloseDisplay(self.display);
+    }
+};
+
+fn load_desktop() Desktop {
+    const display = x11.XOpenDisplay(null);
     const screen = @intCast(usize, 0);
     const root = x11.RootWindow(display, screen);
-    //std.debug.print("Screen size is {d} {d}.\n", .{ width, height });
-    return x11.XCreatePixmap(display, root, @intCast(c_uint, width), @intCast(c_uint, height), @intCast(c_uint, x11.DefaultDepth(display, screen)));
+    const width = x11.DisplayWidth(display, screen);
+    const height = x11.DisplayHeight(display, screen);
+    return Desktop{
+        .width = width,
+        .height = height,
+        .display = display,
+        .pixmap = x11.XCreatePixmap(display, root, @intCast(c_uint, width), @intCast(c_uint, height), @intCast(c_uint, x11.DefaultDepth(display, screen))),
+    };
 }
 
 test "simple test" {
