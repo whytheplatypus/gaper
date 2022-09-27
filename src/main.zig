@@ -1,5 +1,6 @@
 const std = @import("std");
 const x11 = @cImport({
+    @cInclude("X11/Xatom.h");
     @cInclude("X11/Xlib.h");
     @cInclude("X11/extensions/Xinerama.h");
     @cInclude("Imlib2.h");
@@ -45,6 +46,7 @@ pub fn main() !void {
 
     // use monitor specs here
     x11.imlib_render_image_on_drawable(0, 0);
+    desktop.set_atoms();
     _ = x11.XKillClient(display, x11.AllTemporary);
     _ = x11.XSetCloseDownMode(display, x11.RetainTemporary);
     _ = x11.XSetWindowBackgroundPixmap(display, root, desktop.pixmap);
@@ -54,6 +56,7 @@ pub fn main() !void {
     defer _ = x11.XFreePixmap(display, desktop.pixmap);
     defer x11.imlib_free_image();
 }
+
 
 fn fetch_filename_arg() [*:0]const u8 {
     var args = std.process.args();
@@ -91,6 +94,15 @@ const Desktop = struct {
 
     fn close(self: Desktop) void {
         _ = x11.XCloseDisplay(self.display);
+    }
+
+    fn set_atoms(self: Desktop) void {
+        const atom_root = x11.XInternAtom(self.display, "_XROOTPMAP_ID", 0);
+        const atom_eroot = x11.XInternAtom(self.display, "ESETROOT_PMAP_ID", 0);
+        const screen = @intCast(usize, 0);
+        const root = x11.RootWindow(self.display, screen);
+        _ = x11.XChangeProperty(self.display, root, atom_root, x11.XA_PIXMAP, 32, x11.PropModeReplace, @ptrCast(*const u8, &self.pixmap), 1);
+        _ = x11.XChangeProperty(self.display, root, atom_eroot, x11.XA_PIXMAP, 32, x11.PropModeReplace, @ptrCast(*const u8, &self.pixmap), 1);
     }
 };
 
