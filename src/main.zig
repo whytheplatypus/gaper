@@ -8,7 +8,10 @@ const x11 = @cImport({
 
 pub fn main() !void {
     const filename = fetch_filename_arg();
-    const wallpaper = load_wallpaper(filename);
+    const wallpapers = [_]Wallpaper{
+        load_wallpaper(filename),
+    };
+    const wallpaper = wallpapers[0];
 
     const desktop = load_desktop();
     defer desktop.close();
