@@ -10,7 +10,6 @@ pub fn main() !void {
     const filename = fetch_filename_arg();
     const wallpaper = load_wallpaper(filename);
 
-
     const desktop = load_desktop();
     defer desktop.close();
     const display = desktop.display;
@@ -57,7 +56,6 @@ pub fn main() !void {
     defer x11.imlib_free_image();
 }
 
-
 fn fetch_filename_arg() [*:0]const u8 {
     var args = std.process.args();
     _ = args.skip();
@@ -101,8 +99,9 @@ const Desktop = struct {
         const atom_eroot = x11.XInternAtom(self.display, "ESETROOT_PMAP_ID", 0);
         const screen = @intCast(usize, 0);
         const root = x11.RootWindow(self.display, screen);
-        _ = x11.XChangeProperty(self.display, root, atom_root, x11.XA_PIXMAP, 32, x11.PropModeReplace, @ptrCast(*const u8, &self.pixmap), 1);
-        _ = x11.XChangeProperty(self.display, root, atom_eroot, x11.XA_PIXMAP, 32, x11.PropModeReplace, @ptrCast(*const u8, &self.pixmap), 1);
+        // @ptrToInt tells C the address of the pixmap
+        _ = x11.XChangeProperty(self.display, root, atom_root, x11.XA_PIXMAP, 32, x11.PropModeReplace, @ptrToInt(&self.pixmap), 1);
+        _ = x11.XChangeProperty(self.display, root, atom_eroot, x11.XA_PIXMAP, 32, x11.PropModeReplace, @ptrToInt(&self.pixmap), 1);
     }
 };
 
