@@ -9,22 +9,11 @@ const x11 = @cImport({
 pub fn main() !void {
     const dirnames = try fetch_dirname_args();
 
-    var mw = std.ArrayList([]Wallpaper).init(std.heap.page_allocator);
-    for (dirnames) |filename| {
-        try mw.append(try load_directory(filename));
-    }
-
-    // shoudl probably be closing dir
-    const monitor_wallpapers = mw.items;
     const desktop = load_desktop();
     defer desktop.close();
     const display = desktop.display;
 
     std.debug.print("Screen size is {d} {d}.\n", .{ desktop.width, desktop.height });
-
-    const buffer = x11.imlib_create_image(desktop.width, desktop.height);
-    defer x11.imlib_free_image();
-    x11.imlib_context_set_image(buffer);
 
     const screen = @intCast(usize, 0);
     const root = x11.RootWindow(display, screen);
@@ -37,10 +26,10 @@ pub fn main() !void {
     var monitor_index: usize = 0;
     while (monitor_index < monitor_count) : (monitor_index += 1) {
         const xmonitor = xmonitors[monitor_index];
-        const wallpaper_index = monitor_index % monitor_wallpapers.len;
-        std.debug.print("Attaching wallpaper {d} to monitor {d}\n", .{ wallpaper_index, monitor_index });
+        const wallpaper_name = dirnames[monitor_index % dirnames.len];
+
         var monitor = Monitor{
-            .wallpapers = monitor_wallpapers[wallpaper_index],
+            .wallpapers = try load_directory(wallpaper_name, xmonitor.width, xmonitor.height),
             .x_org = xmonitor.x_org,
             .y_org = xmonitor.y_org,
             .width = xmonitor.width,
@@ -63,11 +52,12 @@ pub fn main() !void {
             // TODO extract monitor debug info gathering
             //std.debug.print("Monitor {d} is {d} {d} {d} {d}.\n", .{ i, current_monitor.x_org, current_monitor.y_org, current_monitor.width, current_monitor.height });
 
-            x11.imlib_blend_image_onto_image(wallpaper.image, 0, 0, 0, wallpaper.width, wallpaper.height, current_monitor.x_org, current_monitor.y_org, current_monitor.width, current_monitor.height);
+            //x11.imlib_blend_image_onto_image(wallpaper.image, 0, 0, 0, wallpaper.width, wallpaper.height, current_monitor.x_org, current_monitor.y_org, current_monitor.width, current_monitor.height);
+            x11.imlib_context_set_image(wallpaper.image);
+            x11.imlib_render_image_on_drawable(current_monitor.x_org, current_monitor.y_org);
         }
 
         // use monitor specs here
-        x11.imlib_render_image_on_drawable(0, 0);
         desktop.set_atoms();
         _ = x11.XKillClient(display, x11.AllTemporary);
         _ = x11.XSetCloseDownMode(display, x11.RetainTemporary);
@@ -122,7 +112,7 @@ fn fetch_dirname_args() error{OutOfMemory}![][]const u8 {
     return dirnames.items;
 }
 
-fn load_directory(dirname: []const u8) ![]Wallpaper {
+fn load_directory(dirname: []const u8, width: c_int, height: c_int) ![]Wallpaper {
     var loading_files = std.ArrayList([]const u8).init(std.heap.page_allocator);
     const dir = try std.fs.cwd().openIterableDir(dirname, .{});
 
@@ -140,7 +130,7 @@ fn load_directory(dirname: []const u8) ![]Wallpaper {
     std.sort.sort([]const u8, files, {}, comp_strings);
     for (files) |path| {
         std.debug.print("loading {s}.\n", .{path});
-        const wallpaper = load_wallpaper(path);
+        const wallpaper = load_wallpaper(path, width, height);
         try loading_wallpapers.append(wallpaper);
     }
     return loading_wallpapers.items;
@@ -152,7 +142,7 @@ const Wallpaper = struct {
     image: x11.Imlib_Image,
 };
 
-fn load_wallpaper(filename: []const u8) Wallpaper {
+fn load_wallpaper(filename: []const u8, width: c_int, height: c_int) Wallpaper {
     //const fname = [_][*c]const u8 {filename};
 
     const img = x11.imlib_load_image(filename.ptr);
@@ -160,10 +150,18 @@ fn load_wallpaper(filename: []const u8) Wallpaper {
     defer x11.imlib_context_pop();
     const img_width = x11.imlib_image_get_width();
     const img_height = x11.imlib_image_get_height();
+
+    const buffer = x11.imlib_create_image(width, height);
+    x11.imlib_context_set_image(buffer);
+    x11.imlib_blend_image_onto_image(img, 0, 0, 0, img_width, img_height, 0, 0, width, height);
+
+    x11.imlib_context_set_image(img);
+    x11.imlib_free_image();
+
     return Wallpaper{
         .width = img_width,
         .height = img_height,
-        .image = img,
+        .image = buffer,
     };
 }
 
