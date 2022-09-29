@@ -179,6 +179,9 @@ const Desktop = struct {
         x11.imlib_context_set_dither(1);
         x11.imlib_context_set_blend(1);
         x11.imlib_context_set_drawable(self.pixmap);
+        const root = x11.RootWindow(self.display, screen);
+        _ = x11.XSetWindowBackgroundPixmap(self.display, root, self.pixmap);
+        _ = x11.XSetCloseDownMode(self.display, x11.RetainTemporary);
     }
 
     fn render(self: Desktop) void {
@@ -186,8 +189,6 @@ const Desktop = struct {
         const screen = @intCast(usize, 0);
         const root = x11.RootWindow(self.display, screen);
         _ = x11.XKillClient(self.display, x11.AllTemporary);
-        _ = x11.XSetCloseDownMode(self.display, x11.RetainTemporary);
-        _ = x11.XSetWindowBackgroundPixmap(self.display, root, self.pixmap);
         _ = x11.XClearWindow(self.display, root);
         _ = x11.XFlush(self.display);
         _ = x11.XSync(self.display, 0);
