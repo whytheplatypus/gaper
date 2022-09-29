@@ -7,67 +7,23 @@ const x11 = @cImport({
 });
 
 pub fn main() !void {
-    const dirnames = try fetch_dirname_args();
-
     const desktop = load_desktop();
     defer desktop.close();
-    const display = desktop.display;
 
     std.debug.print("Screen size is {d} {d}.\n", .{ desktop.width, desktop.height });
 
-    const screen = @intCast(usize, 0);
-    const root = x11.RootWindow(display, screen);
+    const monitors = try desktop.load_monitors(try fetch_dirname_args());
 
-    // TODO extract monitor retrieval
-    var monitor_count: c_int = 0;
-    const xmonitors = x11.XineramaQueryScreens(display, &monitor_count);
-    std.debug.print("There are {d} Xmonitors.\n", .{monitor_count});
-    var monitors = std.ArrayList(Monitor).init(std.heap.page_allocator);
-    var monitor_index: usize = 0;
-    while (monitor_index < monitor_count) : (monitor_index += 1) {
-        const xmonitor = xmonitors[monitor_index];
-        const wallpaper_name = dirnames[monitor_index % dirnames.len];
-
-        var monitor = Monitor{
-            .wallpapers = try load_directory(wallpaper_name, xmonitor.width, xmonitor.height),
-            .x_org = xmonitor.x_org,
-            .y_org = xmonitor.y_org,
-            .width = xmonitor.width,
-            .height = xmonitor.height,
-        };
-        try monitors.append(monitor);
-    }
-
-    x11.imlib_context_set_display(display);
-    x11.imlib_context_set_visual(x11.DefaultVisual(display, screen));
-    x11.imlib_context_set_colormap(x11.DefaultColormap(display, screen));
-
-    x11.imlib_context_set_dither(1);
-    x11.imlib_context_set_blend(1);
-    x11.imlib_context_set_drawable(desktop.pixmap);
+    desktop.configure_imlib_context();
 
     while (true) {
-        for (monitors.items) |*current_monitor| {
-            const wallpaper = current_monitor.next_wallpaper();
-            // TODO extract monitor debug info gathering
-            //std.debug.print("Monitor {d} is {d} {d} {d} {d}.\n", .{ i, current_monitor.x_org, current_monitor.y_org, current_monitor.width, current_monitor.height });
-
-            //x11.imlib_blend_image_onto_image(wallpaper.image, 0, 0, 0, wallpaper.width, wallpaper.height, current_monitor.x_org, current_monitor.y_org, current_monitor.width, current_monitor.height);
-            x11.imlib_context_set_image(wallpaper.image);
-            x11.imlib_render_image_on_drawable(current_monitor.x_org, current_monitor.y_org);
+        for (monitors) |*current_monitor| {
+            current_monitor.render_next_wallpaper();
         }
 
-        // use monitor specs here
-        desktop.set_atoms();
-        _ = x11.XKillClient(display, x11.AllTemporary);
-        _ = x11.XSetCloseDownMode(display, x11.RetainTemporary);
-        _ = x11.XSetWindowBackgroundPixmap(display, root, desktop.pixmap);
-        _ = x11.XClearWindow(display, root);
-        _ = x11.XFlush(display);
-        _ = x11.XSync(display, 0);
+        desktop.render();
         std.time.sleep(75 * std.time.ns_per_ms);
     }
-    defer _ = x11.XFreePixmap(display, desktop.pixmap);
 }
 
 const Monitor = struct {
@@ -81,6 +37,12 @@ const Monitor = struct {
     fn next_wallpaper(self: *Monitor) Wallpaper {
         self.index = (self.index + 1) % self.wallpapers.len;
         return self.wallpapers[self.index];
+    }
+
+    fn render_next_wallpaper(self: *Monitor) void {
+        const wallpaper = self.next_wallpaper();
+        x11.imlib_context_set_image(wallpaper.image);
+        x11.imlib_render_image_on_drawable(self.x_org, self.y_org);
     }
 };
 
@@ -172,6 +134,7 @@ const Desktop = struct {
     pixmap: x11.Pixmap,
 
     fn close(self: Desktop) void {
+        _ = x11.XFreePixmap(self.display, self.pixmap);
         _ = x11.XCloseDisplay(self.display);
     }
 
@@ -183,6 +146,51 @@ const Desktop = struct {
         // @ptrToInt tells C the address of the pixmap
         _ = x11.XChangeProperty(self.display, root, atom_root, x11.XA_PIXMAP, 32, x11.PropModeReplace, @ptrToInt(&self.pixmap), 1);
         _ = x11.XChangeProperty(self.display, root, atom_eroot, x11.XA_PIXMAP, 32, x11.PropModeReplace, @ptrToInt(&self.pixmap), 1);
+    }
+
+    fn load_monitors(self: Desktop, dirnames: [][]const u8) ![]Monitor {
+        var monitor_count: c_int = 0;
+        const xmonitors = x11.XineramaQueryScreens(self.display, &monitor_count);
+        std.debug.print("There are {d} Xmonitors.\n", .{monitor_count});
+        var monitors = std.ArrayList(Monitor).init(std.heap.page_allocator);
+        var monitor_index: usize = 0;
+        while (monitor_index < monitor_count) : (monitor_index += 1) {
+            const xmonitor = xmonitors[monitor_index];
+            const wallpaper_name = dirnames[monitor_index % dirnames.len];
+
+            var monitor = Monitor{
+                .wallpapers = try load_directory(wallpaper_name, xmonitor.width, xmonitor.height),
+                .x_org = xmonitor.x_org,
+                .y_org = xmonitor.y_org,
+                .width = xmonitor.width,
+                .height = xmonitor.height,
+            };
+            try monitors.append(monitor);
+        }
+        return monitors.items;
+    }
+
+    fn configure_imlib_context(self: Desktop) void {
+        const screen = @intCast(usize, 0);
+        x11.imlib_context_set_display(self.display);
+        x11.imlib_context_set_visual(x11.DefaultVisual(self.display, screen));
+        x11.imlib_context_set_colormap(x11.DefaultColormap(self.display, screen));
+
+        x11.imlib_context_set_dither(1);
+        x11.imlib_context_set_blend(1);
+        x11.imlib_context_set_drawable(self.pixmap);
+    }
+
+    fn render(self: Desktop) void {
+        self.set_atoms();
+        const screen = @intCast(usize, 0);
+        const root = x11.RootWindow(self.display, screen);
+        _ = x11.XKillClient(self.display, x11.AllTemporary);
+        _ = x11.XSetCloseDownMode(self.display, x11.RetainTemporary);
+        _ = x11.XSetWindowBackgroundPixmap(self.display, root, self.pixmap);
+        _ = x11.XClearWindow(self.display, root);
+        _ = x11.XFlush(self.display);
+        _ = x11.XSync(self.display, 0);
     }
 };
 
