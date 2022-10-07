@@ -3,26 +3,51 @@ const x11 = @cImport({
     @cInclude("X11/Xatom.h");
     @cInclude("X11/Xlib.h");
     @cInclude("X11/extensions/Xinerama.h");
-    @cInclude("Imlib2.h");
+    @cInclude("SDL2/SDL.h");
 });
 
 pub fn main() !void {
     const desktop = load_desktop();
+    desktop.configure();
+    std.debug.print("Desktop loaded.\n", .{});
     defer desktop.close();
+    _ = x11.SDL_Init(x11.SDL_INIT_VIDEO);
+    std.debug.print("SDL Initialized.\n", .{});
+    defer x11.SDL_Quit();
+    std.debug.print("Creating SDL Window.\n", .{});
+    const screen = @intCast(usize, 0);
+    const root = x11.RootWindow(desktop.display, screen);
+    const window = x11.SDL_CreateWindowFrom(@intToPtr(*const anyopaque, root));
+    //const window = x11.SDL_CreateWindowFrom(@intToPtr(*const anyopaque, desktop.pixmap));
+
+    //const window = x11.SDL_CreateWindow("SDL pixels", 0, 0, desktop.width, desktop.height, x11.SDL_WINDOW_SHOWN);
+    std.debug.print("SDL Window created.\n", .{});
+    defer x11.SDL_DestroyWindow(window);
+    const renderer = x11.SDL_CreateRenderer(window, -1, x11.SDL_RENDERER_ACCELERATED | x11.SDL_RENDERER_PRESENTVSYNC);
+    std.debug.print("SDL Renderer created.\n", .{});
+    defer x11.SDL_DestroyWindow(window);
+    defer x11.SDL_DestroyRenderer(renderer);
 
     std.debug.print("Screen size is {d} {d}.\n", .{ desktop.width, desktop.height });
 
-    const monitors = try desktop.load_monitors(try fetch_dirname_args());
-
-    desktop.configure_imlib_context();
+    const monitors = try desktop.load_monitors(try fetch_dirname_args(), renderer);
 
     while (true) {
         for (monitors) |*current_monitor| {
-            current_monitor.render_next_wallpaper();
+            current_monitor.render_next_wallpaper(renderer);
         }
 
-        desktop.render();
-        std.time.sleep(75 * std.time.ns_per_ms);
+        std.debug.print("Painting Desktop\n", .{});
+        desktop.render(renderer);
+
+        var event: x11.SDL_Event = undefined;
+        _ = x11.SDL_PollEvent(&event);
+
+        if (event.type == x11.SDL_QUIT) {
+            break;
+        }
+
+        std.time.sleep(175 * std.time.ns_per_ms);
     }
 }
 
@@ -36,13 +61,19 @@ const Monitor = struct {
 
     fn next_wallpaper(self: *Monitor) Wallpaper {
         self.index = (self.index + 1) % self.wallpapers.len;
+        std.debug.print("Rendering wallpaper {d}\n", .{self.index});
         return self.wallpapers[self.index];
     }
 
-    fn render_next_wallpaper(self: *Monitor) void {
+    fn render_next_wallpaper(self: *Monitor, renderer: ?*x11.SDL_Renderer) void {
         const wallpaper = self.next_wallpaper();
-        x11.imlib_context_set_image(wallpaper.image);
-        x11.imlib_render_image_on_drawable(self.x_org, self.y_org);
+        const rect = &x11.SDL_Rect{
+            .x = self.x_org,
+            .y = self.y_org,
+            .w = self.width,
+            .h = self.height,
+        };
+        _ = x11.SDL_RenderCopy(renderer, wallpaper.image, null, rect);
     }
 };
 
@@ -74,7 +105,7 @@ fn fetch_dirname_args() error{OutOfMemory}![][]const u8 {
     return dirnames.items;
 }
 
-fn load_directory(dirname: []const u8, width: c_int, height: c_int) ![]Wallpaper {
+fn load_directory(dirname: []const u8, renderer: ?*x11.SDL_Renderer) ![]Wallpaper {
     var loading_files = std.ArrayList([]const u8).init(std.heap.page_allocator);
     const dir = try std.fs.cwd().openIterableDir(dirname, .{});
 
@@ -92,38 +123,23 @@ fn load_directory(dirname: []const u8, width: c_int, height: c_int) ![]Wallpaper
     std.sort.sort([]const u8, files, {}, comp_strings);
     for (files) |path| {
         std.debug.print("loading {s}.\n", .{path});
-        const wallpaper = load_wallpaper(path, width, height);
+        const wallpaper = load_wallpaper(path, renderer);
         try loading_wallpapers.append(wallpaper);
     }
     return loading_wallpapers.items;
 }
 
 const Wallpaper = struct {
-    width: c_int,
-    height: c_int,
-    image: x11.Imlib_Image,
+    image: ?*x11.SDL_Texture,
 };
 
-fn load_wallpaper(filename: []const u8, width: c_int, height: c_int) Wallpaper {
-    //const fname = [_][*c]const u8 {filename};
-
-    const img = x11.imlib_load_image(filename.ptr);
-    x11.imlib_context_set_image(img);
-    defer x11.imlib_context_pop();
-    const img_width = x11.imlib_image_get_width();
-    const img_height = x11.imlib_image_get_height();
-
-    const buffer = x11.imlib_create_image(width, height);
-    x11.imlib_context_set_image(buffer);
-    x11.imlib_blend_image_onto_image(img, 0, 0, 0, img_width, img_height, 0, 0, width, height);
-
-    x11.imlib_context_set_image(img);
-    x11.imlib_free_image();
+fn load_wallpaper(filename: []const u8, renderer: ?*x11.SDL_Renderer) Wallpaper {
+    const surface = x11.SDL_LoadBMP(filename.ptr);
+    const texture = x11.SDL_CreateTextureFromSurface(renderer, surface);
+    x11.SDL_FreeSurface(surface);
 
     return Wallpaper{
-        .width = img_width,
-        .height = img_height,
-        .image = buffer,
+        .image = texture,
     };
 }
 
@@ -144,11 +160,11 @@ const Desktop = struct {
         const screen = @intCast(usize, 0);
         const root = x11.RootWindow(self.display, screen);
         // @ptrToInt tells C the address of the pixmap
-        _ = x11.XChangeProperty(self.display, root, atom_root, x11.XA_PIXMAP, 32, x11.PropModeReplace, @ptrToInt(&self.pixmap), 1);
-        _ = x11.XChangeProperty(self.display, root, atom_eroot, x11.XA_PIXMAP, 32, x11.PropModeReplace, @ptrToInt(&self.pixmap), 1);
+        _ = x11.XChangeProperty(self.display, root, atom_root, x11.XA_PIXMAP, 32, x11.PropModeReplace, @ptrToInt(&root), 1);
+        _ = x11.XChangeProperty(self.display, root, atom_eroot, x11.XA_PIXMAP, 32, x11.PropModeReplace, @ptrToInt(&root), 1);
     }
 
-    fn load_monitors(self: Desktop, dirnames: [][]const u8) ![]Monitor {
+    fn load_monitors(self: Desktop, dirnames: [][]const u8, renderer: ?*x11.SDL_Renderer) ![]Monitor {
         var monitor_count: c_int = 0;
         const xmonitors = x11.XineramaQueryScreens(self.display, &monitor_count);
         std.debug.print("There are {d} Xmonitors.\n", .{monitor_count});
@@ -159,7 +175,7 @@ const Desktop = struct {
             const wallpaper_name = dirnames[monitor_index % dirnames.len];
 
             var monitor = Monitor{
-                .wallpapers = try load_directory(wallpaper_name, xmonitor.width, xmonitor.height),
+                .wallpapers = try load_directory(wallpaper_name, renderer),
                 .x_org = xmonitor.x_org,
                 .y_org = xmonitor.y_org,
                 .width = xmonitor.width,
@@ -170,28 +186,23 @@ const Desktop = struct {
         return monitors.items;
     }
 
-    fn configure_imlib_context(self: Desktop) void {
+    fn configure(self: Desktop) void {
         const screen = @intCast(usize, 0);
-        x11.imlib_context_set_display(self.display);
-        x11.imlib_context_set_visual(x11.DefaultVisual(self.display, screen));
-        x11.imlib_context_set_colormap(x11.DefaultColormap(self.display, screen));
-
-        x11.imlib_context_set_dither(1);
-        x11.imlib_context_set_blend(1);
-        x11.imlib_context_set_drawable(self.pixmap);
         const root = x11.RootWindow(self.display, screen);
         _ = x11.XSetWindowBackgroundPixmap(self.display, root, self.pixmap);
         _ = x11.XSetCloseDownMode(self.display, x11.RetainTemporary);
     }
 
-    fn render(self: Desktop) void {
+    fn render(self: Desktop, renderer: ?*x11.SDL_Renderer) void {
+        x11.SDL_RenderPresent(renderer);
+
         self.set_atoms();
-        const screen = @intCast(usize, 0);
-        const root = x11.RootWindow(self.display, screen);
-        _ = x11.XKillClient(self.display, x11.AllTemporary);
-        _ = x11.XClearWindow(self.display, root);
-        _ = x11.XFlush(self.display);
-        _ = x11.XSync(self.display, 0);
+        //const screen = @intCast(usize, 0);
+        //const root = x11.RootWindow(self.display, screen);
+        //_ = x11.XKillClient(self.display, x11.AllTemporary);
+        //_ = x11.XClearWindow(self.display, root);
+        //_ = x11.XFlush(self.display);
+        //_ = x11.XSync(self.display, 0);
     }
 };
 
@@ -207,11 +218,4 @@ fn load_desktop() Desktop {
         .display = display,
         .pixmap = x11.XCreatePixmap(display, root, @intCast(c_uint, width), @intCast(c_uint, height), @intCast(c_uint, x11.DefaultDepth(display, screen))),
     };
-}
-
-test "simple test" {
-    var list = std.ArrayList(i32).init(std.testing.allocator);
-    defer list.deinit(); // try commenting this out and see if zig detects the memory leak!
-    try list.append(42);
-    try std.testing.expectEqual(@as(i32, 42), list.pop());
 }

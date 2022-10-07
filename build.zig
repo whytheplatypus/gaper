@@ -17,7 +17,7 @@ pub fn build(b: *std.build.Builder) void {
     exe.linkLibC();
     exe.linkSystemLibrary("X11");
     exe.linkSystemLibrary("Xinerama");
-    exe.linkSystemLibrary("Imlib2");
+    exe.linkSystemLibrary("SDL2");
     exe.install();
 
     const run_cmd = exe.run();
