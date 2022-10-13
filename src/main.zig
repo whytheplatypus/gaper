@@ -4,6 +4,7 @@ const x11 = @cImport({
     @cInclude("X11/Xlib.h");
     @cInclude("X11/extensions/Xinerama.h");
     @cInclude("SDL2/SDL.h");
+    @cInclude("SDL2/SDL_syswm.h");
 });
 
 pub fn main() !void {
@@ -11,21 +12,30 @@ pub fn main() !void {
     desktop.configure();
     std.debug.print("Desktop loaded.\n", .{});
     defer desktop.close();
-    _ = x11.SDL_Init(x11.SDL_INIT_VIDEO);
-    std.debug.print("SDL Initialized.\n", .{});
-    defer x11.SDL_Quit();
     std.debug.print("Creating SDL Window.\n", .{});
     const screen = @intCast(usize, 0);
     const root = x11.RootWindow(desktop.display, screen);
-    const window = x11.SDL_CreateWindowFrom(@intToPtr(*const anyopaque, root));
-    //const window = x11.SDL_CreateWindowFrom(@intToPtr(*const anyopaque, desktop.pixmap));
+    //const window = x11.SDL_CreateWindowFrom(@intToPtr(*const anyopaque, root));
+    const x11window = x11.XCreateSimpleWindow(desktop.display, root, 0, 0, @intCast(c_uint, desktop.width), @intCast(c_uint, desktop.height), 1, x11.BlackPixel(desktop.display, screen), x11.WhitePixel(desktop.display, screen));
+    defer _ = x11.XDestroyWindow(desktop.display, x11window);
+    const atom_type = x11.XInternAtom(desktop.display, "_NET_WM_WINDOW_TYPE", 0);
+    const atom_desktop = x11.XInternAtom(desktop.display, "_NET_WM_WINDOW_TYPE_DESKTOP", 0);
+    _ = x11.XChangeProperty(desktop.display, x11window, atom_type, x11.XA_ATOM, 32, x11.PropModeReplace, @ptrCast([*c]const u8, &atom_desktop), 1);
+    _ = x11.XMapWindow(desktop.display, x11window);
+    _ = x11.XSync(desktop.display, 0);
+
+    _ = x11.SDL_Init(x11.SDL_INIT_VIDEO);
+    std.debug.print("SDL Initialized.\n", .{});
+    defer x11.SDL_Quit();
+    const window = x11.SDL_CreateWindowFrom(@intToPtr(*const anyopaque, x11window));
 
     //const window = x11.SDL_CreateWindow("SDL pixels", 0, 0, desktop.width, desktop.height, x11.SDL_WINDOW_SHOWN);
     std.debug.print("SDL Window created.\n", .{});
     defer x11.SDL_DestroyWindow(window);
+
     const renderer = x11.SDL_CreateRenderer(window, -1, x11.SDL_RENDERER_ACCELERATED | x11.SDL_RENDERER_PRESENTVSYNC);
+
     std.debug.print("SDL Renderer created.\n", .{});
-    defer x11.SDL_DestroyWindow(window);
     defer x11.SDL_DestroyRenderer(renderer);
 
     std.debug.print("Screen size is {d} {d}.\n", .{ desktop.width, desktop.height });
@@ -37,7 +47,6 @@ pub fn main() !void {
             current_monitor.render_next_wallpaper(renderer);
         }
 
-        std.debug.print("Painting Desktop\n", .{});
         desktop.render(renderer);
 
         var event: x11.SDL_Event = undefined;
@@ -47,7 +56,7 @@ pub fn main() !void {
             break;
         }
 
-        std.time.sleep(175 * std.time.ns_per_ms);
+        std.time.sleep(150 * std.time.ns_per_ms);
     }
 }
 
@@ -61,7 +70,6 @@ const Monitor = struct {
 
     fn next_wallpaper(self: *Monitor) Wallpaper {
         self.index = (self.index + 1) % self.wallpapers.len;
-        std.debug.print("Rendering wallpaper {d}\n", .{self.index});
         return self.wallpapers[self.index];
     }
 
@@ -106,6 +114,7 @@ fn fetch_dirname_args() error{OutOfMemory}![][]const u8 {
 }
 
 fn load_directory(dirname: []const u8, renderer: ?*x11.SDL_Renderer) ![]Wallpaper {
+    std.debug.print("opening {s}.\n", .{dirname});
     var loading_files = std.ArrayList([]const u8).init(std.heap.page_allocator);
     const dir = try std.fs.cwd().openIterableDir(dirname, .{});
 
