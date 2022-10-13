@@ -9,27 +9,15 @@ const x11 = @cImport({
 
 pub fn main() !void {
     const desktop = load_desktop();
-    desktop.configure();
     std.debug.print("Desktop loaded.\n", .{});
     defer desktop.close();
     std.debug.print("Creating SDL Window.\n", .{});
-    const screen = @intCast(usize, 0);
-    const root = x11.RootWindow(desktop.display, screen);
-    //const window = x11.SDL_CreateWindowFrom(@intToPtr(*const anyopaque, root));
-    const x11window = x11.XCreateSimpleWindow(desktop.display, root, 0, 0, @intCast(c_uint, desktop.width), @intCast(c_uint, desktop.height), 1, x11.BlackPixel(desktop.display, screen), x11.WhitePixel(desktop.display, screen));
-    defer _ = x11.XDestroyWindow(desktop.display, x11window);
-    const atom_type = x11.XInternAtom(desktop.display, "_NET_WM_WINDOW_TYPE", 0);
-    const atom_desktop = x11.XInternAtom(desktop.display, "_NET_WM_WINDOW_TYPE_DESKTOP", 0);
-    _ = x11.XChangeProperty(desktop.display, x11window, atom_type, x11.XA_ATOM, 32, x11.PropModeReplace, @ptrCast([*c]const u8, &atom_desktop), 1);
-    _ = x11.XMapWindow(desktop.display, x11window);
-    _ = x11.XSync(desktop.display, 0);
 
     _ = x11.SDL_Init(x11.SDL_INIT_VIDEO);
     std.debug.print("SDL Initialized.\n", .{});
     defer x11.SDL_Quit();
-    const window = x11.SDL_CreateWindowFrom(@intToPtr(*const anyopaque, x11window));
 
-    //const window = x11.SDL_CreateWindow("SDL pixels", 0, 0, desktop.width, desktop.height, x11.SDL_WINDOW_SHOWN);
+    const window = x11.SDL_CreateWindowFrom(@intToPtr(*const anyopaque, desktop.window));
     std.debug.print("SDL Window created.\n", .{});
     defer x11.SDL_DestroyWindow(window);
 
@@ -156,21 +144,11 @@ const Desktop = struct {
     width: c_int,
     height: c_int,
     display: ?*x11.Display,
-    pixmap: x11.Pixmap,
+    window: x11.Window,
 
     fn close(self: Desktop) void {
-        _ = x11.XFreePixmap(self.display, self.pixmap);
+        _ = x11.XDestroyWindow(self.display, self.window);
         _ = x11.XCloseDisplay(self.display);
-    }
-
-    fn set_atoms(self: Desktop) void {
-        const atom_root = x11.XInternAtom(self.display, "_XROOTPMAP_ID", 0);
-        const atom_eroot = x11.XInternAtom(self.display, "ESETROOT_PMAP_ID", 0);
-        const screen = @intCast(usize, 0);
-        const root = x11.RootWindow(self.display, screen);
-        // @ptrToInt tells C the address of the pixmap
-        _ = x11.XChangeProperty(self.display, root, atom_root, x11.XA_PIXMAP, 32, x11.PropModeReplace, @ptrToInt(&root), 1);
-        _ = x11.XChangeProperty(self.display, root, atom_eroot, x11.XA_PIXMAP, 32, x11.PropModeReplace, @ptrToInt(&root), 1);
     }
 
     fn load_monitors(self: Desktop, dirnames: [][]const u8, renderer: ?*x11.SDL_Renderer) ![]Monitor {
@@ -195,23 +173,8 @@ const Desktop = struct {
         return monitors.items;
     }
 
-    fn configure(self: Desktop) void {
-        const screen = @intCast(usize, 0);
-        const root = x11.RootWindow(self.display, screen);
-        _ = x11.XSetWindowBackgroundPixmap(self.display, root, self.pixmap);
-        _ = x11.XSetCloseDownMode(self.display, x11.RetainTemporary);
-    }
-
-    fn render(self: Desktop, renderer: ?*x11.SDL_Renderer) void {
+    fn render(_: Desktop, renderer: ?*x11.SDL_Renderer) void {
         x11.SDL_RenderPresent(renderer);
-
-        self.set_atoms();
-        //const screen = @intCast(usize, 0);
-        //const root = x11.RootWindow(self.display, screen);
-        //_ = x11.XKillClient(self.display, x11.AllTemporary);
-        //_ = x11.XClearWindow(self.display, root);
-        //_ = x11.XFlush(self.display);
-        //_ = x11.XSync(self.display, 0);
     }
 };
 
@@ -221,10 +184,16 @@ fn load_desktop() Desktop {
     const root = x11.RootWindow(display, screen);
     const width = x11.DisplayWidth(display, screen);
     const height = x11.DisplayHeight(display, screen);
+    const x11window = x11.XCreateSimpleWindow(display, root, 0, 0, @intCast(c_uint, width), @intCast(c_uint, height), 1, x11.BlackPixel(display, screen), x11.WhitePixel(display, screen));
+    const atom_type = x11.XInternAtom(display, "_NET_WM_WINDOW_TYPE", 0);
+    const atom_desktop = x11.XInternAtom(display, "_NET_WM_WINDOW_TYPE_DESKTOP", 0);
+    _ = x11.XChangeProperty(display, x11window, atom_type, x11.XA_ATOM, 32, x11.PropModeReplace, @ptrCast([*c]const u8, &atom_desktop), 1);
+    _ = x11.XMapWindow(display, x11window);
+    _ = x11.XSync(display, 0);
     return Desktop{
         .width = width,
         .height = height,
         .display = display,
-        .pixmap = x11.XCreatePixmap(display, root, @intCast(c_uint, width), @intCast(c_uint, height), @intCast(c_uint, x11.DefaultDepth(display, screen))),
+        .window = x11window,
     };
 }
