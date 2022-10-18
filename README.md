@@ -2,7 +2,7 @@
 
 Zaper is an animated desktop background setter for X11
 
-This was created as an excuse to experiment with zap and generally practice.
+This was created as an excuse to experiment with zig and generally practice.
 
 Inspired by [paperview](https://github.com/glouw/paperview) with a goal of getting it to work with compositors like picom.
 
